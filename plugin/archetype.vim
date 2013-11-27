@@ -9,6 +9,7 @@ let s:archetype_base_path=getcwd()
 
 python << EOF
 import threading
+import asyncore
 import socket as _socket
 try:
     import json
@@ -26,8 +27,9 @@ use_archetype = False
 
 # Socket communication: This socket is going to sending and receiving messages
 # from the web server
-socket_communication = None
+socket_connection = None
 
+asyncore_thread = None
 
 def _parse_tabs(tabs):
     tab_list = tabs.split("\n")
@@ -67,31 +69,45 @@ def _get_json_data():
     return json.dumps(data)
 
 
-class SocketListenerThread(threading.Thread):
-
-    socket = None
+class SocketConnection(asyncore.dispatcher):
 
     def __init__(self, host, port):
-        threading.Thread.__init__(self)
-        self.socket = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-        self.socket.connect((host, port))
-        self.socket.send(json.dumps({'id': vim.eval("s:archetype_id"), 'connection_type': 'listener_socket'}))
+        asyncore.dispatcher.__init__(self)
+        self.create_socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        self.connect((host, port))
+        self.buffer = json.dumps({'id': vim.eval("s:archetype_id"), 'connection_type': 'listener_socket'})
 
-    def send_update(self, msg):
-        self.socket.send(msg)
+    def handle_connect(self):
+        print 'handle connect'
+        pass
 
-    def run(self):
-        socket = self.socket
-        while True:
-            data = socket.recv(1024)
-            if not data:
-                break
-            vim.command(data)
+    def handle_close(self):
+        print 'handle close'
         self.close()
-        print "listener closed"
+        pass
 
-    def close(self):
-        self.socket.close()
+    def writable(self):
+        return (len(self.buffer) > 0)
+
+    def handle_write(self):
+        sent = self.send(self.buffer)
+        self.buffer = self.buffer[sent:]
+
+    #def send_update(self, msg):
+    #    self.socket.send(msg)
+
+    #def run(self):
+    #    socket = self.socket
+    #    while True:
+    #        data = socket.recv(1024)
+    #        if not data:
+    #            break
+    #        vim.command(data)
+    #    self.close()
+    #    print "listener closed"
+
+    #def close(self):
+    #    self.socket.close()
 
 
 EOF
@@ -121,17 +137,20 @@ python << EOF
 global use_archetype
 if use_archetype:
     def send_data_to_socket():
-        global socket_communication
-        if not socket_communication: # or not socket_communication.socket.is_alive():
+        global socket_connection
+        global asyncore_thread
+        if not socket_connection:
             try:
-                socket_communication = SocketListenerThread(HOST, PORT)
-                socket_communication.start()
-            except Exception:
-                socket_communication = None
-                print 'Archetype server is unreacheable. Make sure that is running.'
+                socket_connection = SocketConnection(HOST, PORT)
+                asyncore_thread = threading.Thread(target=asyncore.loop)
+                asyncore_thread.start()
+            except Exception, e:
+                socket_connection = None
+                print 'Archetype server is unreacheable. Make sure that is running.', e
 
-        if socket_communication:
-            socket_communication.send_update(_get_json_data())
+        if socket_connection:
+            #socket_connection.send_update(_get_json_data())
+            pass
     send_data_to_socket()
 EOF
 :endfunction
@@ -139,10 +158,11 @@ EOF
 function CloseArchetype()
 python << EOF
 global use_archetype
+global asyncore_thread
 if use_archetype:
-    global socket_communication
-    socket_communication.close()
-    socket_communication.join()
+    global socket_connection
+    socket_connection.close()
+    asyncore_thread.join()
 EOF
 :endfunction
 
